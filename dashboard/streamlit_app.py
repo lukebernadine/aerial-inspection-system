@@ -228,6 +228,18 @@ label { color: var(--text2) !important; font-size: 0.85rem !important; }
     border-radius: 10px !important;
     margin-bottom: 6px !important;
 }
+[data-testid="stExpander"] * {
+    color: var(--text) !important;
+}
+[data-testid="stExpander"] summary {
+    color: var(--text) !important;
+    font-weight: 500 !important;
+}
+[data-testid="stExpander"] p,
+[data-testid="stExpander"] span,
+[data-testid="stExpander"] div {
+    color: var(--text) !important;
+}
 
 /* ── File uploader ── */
 [data-testid="stFileUploader"] {
