@@ -1,108 +1,120 @@
-import sqlite3
-from pathlib import Path
+"""
+storage.py
+Supabase (PostgreSQL) storage layer for the Vantage aerial inspection system.
+Replaces the SQLite implementation with cloud database calls.
+"""
+
+import os
 from datetime import datetime, timezone
+from supabase import create_client, Client
+from dotenv import load_dotenv
 
-PROJECT_ROOT = Path(__file__).parent.parent
-DB_PATH      = PROJECT_ROOT / "database" / "inspections.db"
-SCHEMA_PATH  = PROJECT_ROOT / "database" / "schema.sql"
+load_dotenv()
 
+_client: Client = None
 
-def get_connection():
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(DB_PATH))
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+def get_client() -> Client:
+    global _client
+    if _client is None:
+        url = os.environ.get("SUPABASE_URL")
+        key = os.environ.get("SUPABASE_KEY")
+        if not url or not key:
+            raise ValueError("SUPABASE_URL and SUPABASE_KEY must be set in .env")
+        _client = create_client(url, key)
+    return _client
 
 
 def initialise_db():
-    with get_connection() as conn:
-        schema = SCHEMA_PATH.read_text()
-        conn.executescript(schema)
-    print(f"✅ Database initialised at: {DB_PATH}")
+    """No-op for Supabase — tables are created via SQL Editor."""
+    print("✅ Supabase storage ready.")
 
 
-def insert_flight_record(record):
-    sql = """
-    INSERT OR REPLACE INTO flight_records
-        (flight_id, inspection_id, date, location_name, gps_lat, gps_lon,
-         altitude_ft, duration_min, distance_ft, max_speed_mph, drone_model,
-         weather_conditions, battery_start_pct, battery_end_pct, pilot_name, notes)
-    VALUES
-        (:flight_id, :inspection_id, :date, :location_name, :gps_lat, :gps_lon,
-         :altitude_ft, :duration_min, :distance_ft, :max_speed_mph, :drone_model,
-         :weather_conditions, :battery_start_pct, :battery_end_pct, :pilot_name, :notes)
-    """
-    with get_connection() as conn:
-        conn.execute(sql, record)
+# ── Flight Records ────────────────────────────────────────────────────────────
+
+def insert_flight_record(record: dict):
+    data = {k: v for k, v in record.items() if v is not None or k == "flight_id"}
+    get_client().table("flight_records").upsert(data).execute()
 
 
-def get_flight_record(flight_id):
-    with get_connection() as conn:
-        row = conn.execute("SELECT * FROM flight_records WHERE flight_id = ?", (flight_id,)).fetchone()
-    return dict(row) if row else None
+def get_flight_record(flight_id: str) -> dict | None:
+    res = get_client().table("flight_records").select("*").eq("flight_id", flight_id).execute()
+    return res.data[0] if res.data else None
 
 
-def get_all_flights():
-    with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM flight_records ORDER BY date DESC").fetchall()
-    return [dict(r) for r in rows]
+def get_all_flights() -> list[dict]:
+    res = get_client().table("flight_records").select("*").order("date", desc=True).execute()
+    return res.data or []
 
 
-def link_inspection_to_flight(flight_id, inspection_id):
-    with get_connection() as conn:
-        conn.execute("UPDATE flight_records SET inspection_id = ? WHERE flight_id = ?", (inspection_id, flight_id))
+def link_inspection_to_flight(flight_id: str, inspection_id: str):
+    get_client().table("flight_records").update(
+        {"inspection_id": inspection_id}
+    ).eq("flight_id", flight_id).execute()
 
 
-def insert_inspection_record(record):
-    sql = """
-    INSERT OR REPLACE INTO inspection_records
-        (inspection_id, flight_id, date, property_address, inspection_type,
-         inspector_name, findings, overall_risk_score, risk_tier, status)
-    VALUES
-        (:inspection_id, :flight_id, :date, :property_address, :inspection_type,
-         :inspector_name, :findings, :overall_risk_score, :risk_tier, :status)
-    """
-    with get_connection() as conn:
-        conn.execute(sql, record)
+# ── Inspection Records ────────────────────────────────────────────────────────
+
+def insert_inspection_record(record: dict):
+    data = {k: v for k, v in record.items()}
+    get_client().table("inspection_records").upsert(data).execute()
 
 
-def get_inspection_record(inspection_id):
-    with get_connection() as conn:
-        row = conn.execute("SELECT * FROM inspection_records WHERE inspection_id = ?", (inspection_id,)).fetchone()
-    return dict(row) if row else None
+def get_inspection_record(inspection_id: str) -> dict | None:
+    res = get_client().table("inspection_records").select("*").eq("inspection_id", inspection_id).execute()
+    return res.data[0] if res.data else None
 
 
-def get_all_draft_inspections():
-    with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM inspection_records WHERE status = 'Draft'").fetchall()
-    return [dict(r) for r in rows]
+def get_all_draft_inspections() -> list[dict]:
+    res = get_client().table("inspection_records").select("*").eq("status", "Draft").execute()
+    return res.data or []
 
 
-def get_all_inspections():
-    with get_connection() as conn:
-        rows = conn.execute("SELECT * FROM inspection_records ORDER BY date DESC").fetchall()
-    return [dict(r) for r in rows]
+def get_all_inspections() -> list[dict]:
+    res = get_client().table("inspection_records").select("*").order("date", desc=True).execute()
+    return res.data or []
 
 
-def update_inspection_scores(inspection_id, score, tier):
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-    with get_connection() as conn:
-        conn.execute(
-            "UPDATE inspection_records SET overall_risk_score = ?, risk_tier = ?, status = 'Complete', updated_at = ? WHERE inspection_id = ?",
-            (score, tier, now, inspection_id),
-        )
+def update_inspection_scores(inspection_id: str, score: float, tier: str):
+    now = datetime.now(timezone.utc).isoformat()
+    get_client().table("inspection_records").update({
+        "overall_risk_score": score,
+        "risk_tier":          tier,
+        "status":             "Complete",
+        "updated_at":         now,
+    }).eq("inspection_id", inspection_id).execute()
 
 
-def get_inspection_with_flight(inspection_id):
-    sql = """
-    SELECT i.*, f.location_name, f.gps_lat, f.gps_lon, f.altitude_ft,
-           f.duration_min, f.distance_ft, f.max_speed_mph, f.drone_model,
-           f.weather_conditions, f.battery_start_pct, f.battery_end_pct, f.pilot_name
-    FROM inspection_records i
-    LEFT JOIN flight_records f ON i.flight_id = f.flight_id
-    WHERE i.inspection_id = ?
-    """
-    with get_connection() as conn:
-        row = conn.execute(sql, (inspection_id,)).fetchone()
-    return dict(row) if row else None
+def get_inspection_with_flight(inspection_id: str) -> dict | None:
+    # Fetch inspection
+    insp_res = get_client().table("inspection_records").select("*").eq("inspection_id", inspection_id).execute()
+    if not insp_res.data:
+        return None
+    record = insp_res.data[0]
+
+    # Fetch linked flight if exists
+    if record.get("flight_id"):
+        flt_res = get_client().table("flight_records").select("*").eq("flight_id", record["flight_id"]).execute()
+        if flt_res.data:
+            flight = flt_res.data[0]
+            # Merge flight fields into record
+            for key in ["location_name", "gps_lat", "gps_lon", "altitude_ft",
+                        "duration_min", "distance_ft", "max_speed_mph", "drone_model",
+                        "weather_conditions", "battery_start_pct", "battery_end_pct", "pilot_name"]:
+                if key not in record or record[key] is None:
+                    record[key] = flight.get(key)
+
+    return record
+
+
+def delete_inspection_record(inspection_id: str):
+    get_client().table("inspection_records").delete().eq("inspection_id", inspection_id).execute()
+
+
+def delete_flight_record(flight_id: str):
+    get_client().table("flight_records").delete().eq("flight_id", flight_id).execute()
+
+
+# ── Compatibility shim for dashboard delete functions ─────────────────────────
+def get_connection():
+    """Not used with Supabase — kept for import compatibility."""
+    raise NotImplementedError("get_connection() is not available with Supabase storage.")
