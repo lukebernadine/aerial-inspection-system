@@ -1,0 +1,31 @@
+# Environment & secrets
+.env
+*.env
+
+# Database
+data/inspections.db
+
+# Reports (keep folder, not contents)
+reports/*.pdf
+reports/*.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+env/
+
+# VS Code
+.vscode/
+
+# macOS
+.DS_Store
+
+# Streamlit
+.streamlit/
